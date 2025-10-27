@@ -133,7 +133,6 @@
         
         /* --- Drifter Icon & Animation (MODIFIED) --- */
         .drifter-icon-wrapper {
-            /* animation: blink 1.5s infinite ease-in-out; */ /* <-- REMOVED from wrapper */
             position: relative; /* Needed for absolute positioning of text */
         }
         .drifter-buoy-svg {
@@ -141,7 +140,6 @@
             height: 32px;
             animation: blink 1.5s infinite ease-in-out; /* <-- ADDED to SVG only */
         }
-        /* NEW: Container for labels */
         .drifter-label-container {
             position: absolute;
             bottom: -42px; /* <-- CHANGED from -38px to add space */
@@ -154,7 +152,6 @@
             z-index: 1000;
         }
         .drifter-name-label {
-            /* Now controlled by container */
             white-space: nowrap;
             background-color: rgba(255, 255, 255, 0.7);
             padding: 2px 5px;
@@ -163,9 +160,7 @@
             color: #333;
             border: 1px solid #ccc;
         }
-        /* NEW: Time ago label */
         .drifter-time-ago-label {
-            /* Now controlled by container */
             white-space: nowrap;
             background-color: rgba(255, 255, 255, 0.7);
             padding: 1px 4px;
@@ -185,6 +180,28 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
             font-size: 0.9rem;
             padding: 6px 8px;
+        }
+
+        /* --- NEW: Playback Controls --- */
+        #playback-slider {
+            width: 100%;
+            cursor: pointer;
+        }
+        #playback-timestamp {
+            font-size: 0.8rem;
+            color: #333;
+            font-weight: 500;
+            text-align: center;
+            margin-top: 4px;
+            background: #fff;
+            padding: 2px 0;
+            border: 1px solid #dee2e6;
+        }
+        /* Playback marker on map */
+        .playback-marker {
+            border: 2px solid #ffffff;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5);
+            border-radius: 50%;
         }
     </style>
 </head>
@@ -242,6 +259,16 @@
                         <input type="datetime-local" id="end-time" class="form-input">
                     </div>
                     <button id="filter-button" class="btn btn-primary">Apply Filters</button>
+                </div>
+            </div>
+
+            <!-- *** NEW: Playback Controls Section *** -->
+            <div id="playback-control-box" class="filter-box p-3" style="display: none;">
+                <h2 class="filter-title border-b border-gray-300 pb-2 mb-3">Playback Controls</h2>
+                <div class="space-y-3">
+                    <button id="play-pause-button" class="btn btn-secondary">Play</button>
+                    <input type="range" id="playback-slider" min="0" max="100" value="0" class="mt-2">
+                    <div id="playback-timestamp">---</div>
                 </div>
             </div>
 
@@ -351,7 +378,6 @@
         const latestDataPlaceholder = document.getElementById('latest-data-placeholder');
         const latestDataInfo = document.getElementById('latest-data-info');
         const latestNameEl = document.getElementById('latest-name');
-        // *** NEW: SIDEBAR TIME AGO ELEMENT ***
         const latestAgoEl = document.getElementById('latest-ago');
         const latestIdEl = document.getElementById('latest-id');
         const timestampEl = document.getElementById('latest-timestamp');
@@ -364,6 +390,13 @@
         const sstModalTitle = document.getElementById('sst-modal-title');
         const sstModalCloseBtn = document.getElementById('sst-modal-close-btn');
         const sstChartCanvas = document.getElementById('sst-chart').getContext('2d');
+
+        // *** NEW: Playback UI Elements ***
+        const playbackControlBox = document.getElementById('playback-control-box');
+        const playPauseBtn = document.getElementById('play-pause-button');
+        const playbackSlider = document.getElementById('playback-slider');
+        const playbackTimestampLabel = document.getElementById('playback-timestamp');
+
 
         // --- 3. MAP INITIALIZATION ---
         const map = L.map('map').setView([0, 0], 3);
@@ -387,7 +420,9 @@
 
         // Map Layers
         const dataLayers = L.layerGroup().addTo(map); // Main group for all drifter data
+        const playbackLayer = L.layerGroup(); // *** NEW: Layer for playback markers ***
         let drifterInfoCache = {}; // Cache to store {id: name}
+        let drifterColorMap = {}; // *** NEW: Cache for {id: color} ***
         
         // Color palette for multiple drifters
         const drifterColors = [
@@ -396,6 +431,15 @@
         ];
         let currentSubscription = null;
         let sstChartInstance = null; // To hold the Chart.js instance
+
+        // *** NEW: Playback State Variables ***
+        let playbackData = {};
+        let playbackTimer = null;
+        let playbackIndex = 0;
+        const playbackSpeed = 200; // Milliseconds per step
+        let isPlaybackDataReady = false;
+        let isPlaying = false;
+
 
         // --- 4. DATA FETCHING & PLOTTING ---
 
@@ -416,10 +460,6 @@
             });
         }
         
-        /**
-         * Builds a Supabase query based on the current UI filters.
-         * This is a helper function used by fetchAndPlotData and exportFilteredData.
-         */
         function buildFilteredQuery() {
             const selectedDrifterId = drifterSelect.value;
             const startTime = startTimeInput.value;
@@ -447,7 +487,11 @@
             statusEl.textContent = 'Fetching...';
             statusEl.className = 'text-sm font-medium px-2 py-1 bg-yellow-200 text-yellow-800';
             loadingEl.style.display = 'flex';
-            dataLayers.clearLayers(); // Clear all old polylines, markers, etc.
+            
+            // Clear all layers and reset state
+            dataLayers.clearLayers();
+            drifterColorMap = {}; // Reset color map
+            resetPlayback(); // *** NEW: Reset playback on new fetch ***
             clearSidebar();
 
             const query = buildFilteredQuery();
@@ -463,7 +507,8 @@
 
             if (data && data.length > 0) {
                 console.log(`Fetched ${data.length} points.`);
-                plotData(data);
+                plotData(data); // Plot main tracks
+                setupPlayback(data); // *** NEW: Setup playback data ***
                 
                 // Update sidebar only if a single drifter is selected
                 if (drifterSelect.value !== 'all') {
@@ -499,7 +544,10 @@
                 const latLngs = positions.map(pos => [pos.latitude, pos.longitude]).reverse();
                 allLatLngs.push(...latLngs);
 
+                // *** MODIFIED: Use color map ***
                 const color = drifterColors[drifterIndex % drifterColors.length];
+                drifterColorMap[drifterId] = color; // Store color for playback
+                
                 // Handle names for both Supabase data (in cache) and local CSV data
                 const drifterName = drifterInfoCache[drifterId] || 
                                     (drifterId.startsWith('local_') ? drifterId.replace(/_/g, ' ') : `Drifter ${drifterId.substring(0, 4)}`);
@@ -534,7 +582,7 @@
                 const latestData = positions[0]; // Newest data
                 const endPoint = [latestData.latitude, latestData.longitude];
                 const endTime = new Date(latestData.timestamp).toLocaleString();
-                const timeAgo = formatTimeAgo(latestData.timestamp); // *** NEW: Get time ago string
+                const timeAgo = formatTimeAgo(latestData.timestamp); 
                 const battery = latestData.battery_level ? `${latestData.battery_level.toFixed(2)}v` : 'N/A';
                 const popupContent = `
                     <div>
@@ -545,7 +593,6 @@
                         Batt: ${battery}
                     </div>`;
 
-                // *** NEW: MODIFIED ICON HTML ***
                 const buoyIconHTML = `
                     <div>
                         <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" class="drifter-buoy-svg" style="margin: 0 auto; display: block;">
@@ -584,12 +631,6 @@
             }
         }
 
-        // *** NEW: HELPER FUNCTION ***
-        /**
-         * Converts a timestamp into a "time ago" string.
-         * @param {string | Date} timestamp The timestamp to compare.
-         * @returns {string} A relative time string (e.g., "5 minutes ago").
-         */
         function formatTimeAgo(timestamp) {
             const now = new Date();
             const past = new Date(timestamp);
@@ -621,7 +662,6 @@
                 return `${val} ${val === 1 ? "minute" : "minutes"} ago`;
             }
             const val = Math.floor(seconds);
-            // Don't show "0 seconds ago", just "now"
             if (val < 5) {
                 return "just now";
             }
@@ -632,7 +672,7 @@
             latestDataPlaceholder.style.display = 'block';
             latestDataInfo.classList.add('hidden');
             latestNameEl.textContent = '---';
-            latestAgoEl.textContent = '---'; // *** NEW: Clear time ago
+            latestAgoEl.textContent = '---'; 
             latestIdEl.textContent = 'ID: ---';
             timestampEl.textContent = '---';
             latEl.textContent = '---';
@@ -652,9 +692,9 @@
             const timestampDate = new Date(latestData.timestamp); // Create Date object once
 
             latestNameEl.textContent = drifterInfoCache[latestData.drifter_id] || 'Unknown';
-            latestAgoEl.textContent = `(${formatTimeAgo(timestampDate)})`; // *** NEW: Set time ago
+            latestAgoEl.textContent = `(${formatTimeAgo(timestampDate)})`; 
             latestIdEl.textContent = `ID: ${latestData.drifter_id}`;
-            timestampEl.textContent = timestampDate.toLocaleString(); // Use existing Date object
+            timestampEl.textContent = timestampDate.toLocaleString(); 
             latEl.textContent = latestData.latitude.toFixed(6);
             lonEl.textContent = latestData.longitude.toFixed(6);
             
@@ -667,11 +707,6 @@
 
         // --- 5. MODAL & CHARTING FUNCTIONS ---
 
-        /**
-         * Shows the SST time-series chart in a modal.
-         * @param {Array<Object>} positionsData The position data for a single drifter, newest first.
-         * @param {string} drifterName The name of the drifter.
-         */
         function showSstChartModal(positionsData, drifterName) {
             // Data is newest first, reverse it for chronological chart
             const chartData = positionsData.slice().reverse(); 
@@ -695,7 +730,6 @@
             
             if (!hasSstData) {
                  sstChartCanvas.canvas.style.display = 'none';
-                 // Show a message instead
                  if (!document.getElementById('no-sst-data')) {
                     const noDataEl = document.createElement('p');
                     noDataEl.id = 'no-sst-data';
@@ -720,7 +754,7 @@
                             borderWidth: 2,
                             fill: true,
                             tension: 0.1,
-                            spanGaps: true // Connect lines over null values
+                            spanGaps: true 
                         }]
                     },
                     options: {
@@ -746,7 +780,7 @@
 
             // Show the modal
             sstModal.classList.remove('hidden');
-            sstModal.classList.add('flex'); // Use flex to center it
+            sstModal.classList.add('flex'); 
         }
 
         function hideSstChartModal() {
@@ -765,7 +799,6 @@
             const selectedDrifterId = drifterSelect.value;
             console.log(`Subscribing to changes for: ${selectedDrifterId}`);
 
-            // Remove old subscription if it exists
             if (currentSubscription) {
                 db.removeChannel(currentSubscription);
                 currentSubscription = null;
@@ -777,7 +810,6 @@
                 table: 'drifter_positions',
             };
 
-            // Add filter if a specific drifter is selected
             if (selectedDrifterId !== 'all') {
                 channelConfig.filter = `drifter_id=eq.${selectedDrifterId}`;
             }
@@ -787,8 +819,7 @@
                     console.log('New data received!', payload);
                     statusEl.textContent = 'Updating...';
                     statusEl.className = 'text-sm font-medium px-2 py-1 bg-blue-200 text-blue-800';
-                    // Re-fetch all data to re-apply filters
-                    fetchAndPlotData();
+                    fetchAndPlotData(); // Re-fetch all data to re-apply filters & playback
                 })
                 .subscribe((status, err) => {
                     if (status === 'SUBSCRIBED') {
@@ -809,9 +840,6 @@
 
         // --- 7. DATA ACTIONS (CSV Import/Export) ---
 
-        /**
-         * Fetches filtered data and triggers a CSV download.
-         */
         async function exportFilteredData() {
             statusEl.textContent = 'Exporting...';
             statusEl.className = 'text-sm font-medium px-2 py-1 bg-blue-200 text-blue-800';
@@ -851,13 +879,9 @@
             statusEl.className = 'text-sm font-medium px-2 py-1 bg-green-200 text-green-800';
         }
 
-        /**
-         * Converts an array of objects into a CSV string.
-         * @param {Array<Object>} data The data array from Supabase.
-         */
         function convertToCSV(data) {
             const headers = Object.keys(data[0]);
-            const csvRows = [headers.join(',')]; // Header row
+            const csvRows = [headers.join(',')]; 
 
             for (const row of data) {
                 const values = headers.map(header => {
@@ -866,10 +890,8 @@
                         return '';
                     }
                     if (typeof val === 'object') {
-                        // Stringify JSON objects and wrap in quotes
                         val = `"${JSON.stringify(val).replace(/"/g, '""')}"`;
                     } else {
-                        // Wrap plain strings in quotes to handle potential commas
                         val = `"${String(val).replace(/"/g, '""')}"`;
                     }
                     return val;
@@ -879,10 +901,6 @@
             return csvRows.join('\n');
         }
 
-        /**
-         * Handles the file input change event for CSV import.
-         * @param {Event} event The file input event.
-         */
         function handleFileUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -890,6 +908,12 @@
             statusEl.textContent = 'Parsing CSV...';
             statusEl.className = 'text-sm font-medium px-2 py-1 bg-yellow-200 text-yellow-800';
             loadingEl.style.display = 'flex';
+            
+            // Clear all layers and reset state
+            dataLayers.clearLayers();
+            drifterColorMap = {};
+            resetPlayback(); // *** NEW: Reset playback on import ***
+            clearSidebar();
 
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -903,11 +927,6 @@
                     return;
                 }
                 
-                // Clear map and sidebar
-                dataLayers.clearLayers();
-                clearSidebar();
-                
-                // Stop listening to Supabase
                 if (currentSubscription) {
                     db.removeChannel(currentSubscription);
                     currentSubscription = null;
@@ -915,6 +934,7 @@
 
                 // Plot the local data
                 plotData(parsedData);
+                setupPlayback(parsedData); // *** NEW: Setup playback for CSV ***
                 
                 statusEl.textContent = 'Displaying Local CSV';
                 statusEl.className = 'text-sm font-medium px-2 py-1 bg-blue-200 text-blue-800';
@@ -922,16 +942,9 @@
             };
             
             reader.readAsText(file);
-            
-            // Reset input value so 'change' fires again for the same file
             event.target.value = null;
         }
 
-        /**
-         * A simple CSV parser.
-         * @param {string} text The raw CSV text.
-         * @returns {Array<Object>} An array of data objects, newest first.
-         */
         function parseCSV(text) {
             try {
                 const lines = text.split('\n').filter(line => line.trim() !== '');
@@ -942,7 +955,6 @@
                 const latIndex = headers.indexOf('latitude');
                 const lonIndex = headers.indexOf('longitude');
                 const timeIndex = headers.indexOf('timestamp');
-                // Look for 'drifter_id' or 'name' for grouping
                 const idIndex = headers.indexOf('drifter_id') !== -1 ? headers.indexOf('drifter_id') : headers.indexOf('name');
                 const batteryIndex = headers.indexOf('battery_level');
 
@@ -957,13 +969,12 @@
                     const lat = parseFloat(values[latIndex]);
                     const lon = parseFloat(values[lonIndex]);
 
-                    if (isNaN(lat) || isNaN(lon)) continue; // Skip invalid rows
+                    if (isNaN(lat) || isNaN(lon)) continue; 
 
                     const drifter_id = idIndex !== -1 ? values[idIndex] : 'local_data';
                     const timestamp = timeIndex !== -1 ? (values[timeIndex] || new Date().toISOString()) : new Date().toISOString();
                     const battery_level = batteryIndex !== -1 ? parseFloat(values[batteryIndex]) : null;
                     
-                    // Simple SST check
                     const sstIndex = headers.indexOf('sst_c');
                     let other_data = null;
                     if (sstIndex !== -1) {
@@ -974,9 +985,9 @@
                     }
 
                     data.push({
-                        id: i, // Fake ID
+                        id: i, 
                         drifter_id: drifter_id,
-                        timestamp: new Date(timestamp).toISOString(), // Standardize timestamp
+                        timestamp: new Date(timestamp).toISOString(), 
                         latitude: lat,
                         longitude: lon,
                         battery_level: isNaN(battery_level) ? null : battery_level,
@@ -984,7 +995,6 @@
                     });
                 }
                 
-                // Return data sorted newest first, just like Supabase query
                 return data.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
                 
             } catch (error) {
@@ -994,9 +1004,167 @@
                 return [];
             }
         }
+        
+        // --- 8. NEW: PLAYBACK FUNCTIONS ---
+
+        /**
+         * Resets and hides the playback controls.
+         */
+        function resetPlayback() {
+            stopPlayback();
+            isPlaybackDataReady = false;
+            playbackData = {};
+            playbackIndex = 0;
+            playbackControlBox.style.display = 'none';
+            playbackSlider.value = 0;
+            playbackSlider.max = 0;
+            playbackTimestampLabel.textContent = '---';
+            playbackLayer.clearLayers();
+            if (map.hasLayer(playbackLayer)) {
+                map.removeLayer(playbackLayer);
+            }
+        }
+
+        /**
+         * Sets up the playback data and UI based on fetched data.
+         * @param {Array<Object>} data The data from Supabase (newest first).
+         */
+        function setupPlayback(data) {
+            // Group data by drifter_id
+            const dataByDrifter = data.reduce((acc, pos) => {
+                if (!acc[pos.drifter_id]) {
+                    acc[pos.drifter_id] = [];
+                }
+                acc[pos.drifter_id].push(pos);
+                return acc;
+            }, {});
+
+            // Reverse each drifter's data to be chronological (oldest first)
+            Object.values(dataByDrifter).forEach(arr => arr.reverse());
+
+            // Find the length of the *longest* track
+            const maxLength = Math.max(0, ...Object.values(dataByDrifter).map(arr => arr.length));
+
+            // Don't show playback if there's no movement to show
+            if (maxLength < 2) {
+                resetPlayback();
+                return;
+            }
+
+            playbackData.drifters = dataByDrifter;
+            playbackData.maxLength = maxLength;
+
+            playbackSlider.min = 0;
+            playbackSlider.max = maxLength - 1;
+            playbackSlider.value = 0;
+            playbackIndex = 0;
+
+            isPlaybackDataReady = true;
+            playbackControlBox.style.display = 'block';
+            playbackLayer.addTo(map);
+
+            // Show the first step
+            updatePlayback(0);
+        }
+
+        /**
+         * Updates the playback markers on the map to a specific index.
+         * @param {number | string} index The step/index to display.
+         */
+        function updatePlayback(index) {
+            if (!isPlaybackDataReady) return;
+
+            playbackIndex = parseInt(index);
+            playbackSlider.value = playbackIndex;
+            playbackLayer.clearLayers();
+
+            let latestTimestamp = null;
+
+            // For each drifter, plot its marker at the current index
+            for (const [drifterId, positions] of Object.entries(playbackData.drifters)) {
+                
+                // Ensure tracks shorter than the max index just stay at their last point
+                const actualIndex = Math.min(playbackIndex, positions.length - 1);
+                const pos = positions[actualIndex];
+
+                if (!pos) continue; // Skip if no position data
+
+                const color = drifterColorMap[drifterId] || '#333333'; // Get saved color
+
+                // Create the playback marker
+                L.circleMarker([pos.latitude, pos.longitude], { 
+                    radius: 8, 
+                    color: '#ffffff', // White border
+                    weight: 2,
+                    fillColor: color, 
+                    fillOpacity: 1.0,
+                    className: 'playback-marker' // For styling
+                }).addTo(playbackLayer);
+
+                // Find the latest timestamp among all markers at this step
+                const currentTimestamp = new Date(pos.timestamp);
+                if (!latestTimestamp || currentTimestamp > latestTimestamp) {
+                    latestTimestamp = currentTimestamp;
+                }
+            }
+
+            // Update the timestamp label
+            playbackTimestampLabel.textContent = latestTimestamp ? latestTimestamp.toLocaleString() : '---';
+        }
+
+        /**
+         * Toggles the play/pause state of the playback.
+         */
+        function togglePlayPause() {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                startPlayback();
+            }
+        }
+
+        /**
+         * Starts the playback timer.
+         */
+        function startPlayback() {
+            if (!isPlaybackDataReady) return;
+            
+            // If at the end, loop to beginning
+            if (playbackIndex >= playbackData.maxLength - 1) {
+                playbackIndex = 0;
+            }
+
+            isPlaying = true;
+            playPauseBtn.textContent = 'Pause';
+
+            playbackTimer = setInterval(() => {
+                let nextIndex = playbackIndex + 1;
+                
+                // Stop or loop when reaching the end
+                if (nextIndex >= playbackData.maxLength) {
+                    // stopPlayback(); // Option 1: Stop at end
+                    nextIndex = 0; // Option 2: Loop to start
+                }
+                
+                updatePlayback(nextIndex);
+
+            }, playbackSpeed);
+        }
+
+        /**
+         * Stops the playback timer.
+         */
+        function stopPlayback() {
+            isPlaying = false;
+            playPauseBtn.textContent = 'Play';
+            if (playbackTimer) {
+                clearInterval(playbackTimer);
+                playbackTimer = null;
+            }
+        }
 
 
-        // --- 8. INITIALIZATION ---
+        // --- 9. INITIALIZATION ---
         
         // Menu toggle listeners
         const toggleMenu = () => {
@@ -1025,6 +1193,17 @@
                 hideSstChartModal();
             }
          });
+
+        // *** NEW: Playback Event Listeners ***
+        playPauseBtn.addEventListener('click', togglePlayPause);
+        playbackSlider.addEventListener('input', (e) => {
+            // If user scrubs the slider, stop playback
+            if (isPlaying) {
+                stopPlayback();
+            }
+            updatePlayback(e.target.value);
+        });
+
 
         // Initial load
         map.whenReady(async () => {
