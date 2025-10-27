@@ -79,19 +79,30 @@
             outline: 0;
             box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
         }
-        .filter-button {
+        .btn {
             width: 100%;
             padding: 0.6rem;
             font-size: 0.9rem;
             font-weight: 600;
             color: #fff;
-            background-color: #0056b3;
-            border: 1px solid #0056b3;
             cursor: pointer;
+            border: 1px solid;
             transition: background-color .15s ease-in-out;
+            text-align: center;
         }
-        .filter-button:hover {
+        .btn-primary {
+            background-color: #0056b3;
+            border-color: #0056b3;
+        }
+        .btn-primary:hover {
             background-color: #004494;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            border-color: #6c757d;
+        }
+        .btn-secondary:hover {
+            background-color: #5a6268;
         }
         /* Leaflet controls */
         .leaflet-control-layers, .leaflet-control-zoom, .leaflet-control-attribution {
@@ -185,7 +196,17 @@
                         <label for="end-time" class="block text-sm font-medium text-gray-700 mb-1">End Time</label>
                         <input type="datetime-local" id="end-time" class="form-input">
                     </div>
-                    <button id="filter-button" class="filter-button">Apply Filters</button>
+                    <button id="filter-button" class="btn btn-primary">Apply Filters</button>
+                </div>
+            </div>
+
+            <!-- Data Actions Section -->
+            <div class="filter-box p-3">
+                <h2 class="filter-title border-b border-gray-300 pb-2 mb-3">Data Actions</h2>
+                <div class="space-y-2">
+                    <button id="export-csv-button" class="btn btn-secondary">Export as CSV</button>
+                    <button id="import-csv-button" class="btn btn-secondary">Import Data </button>
+                    <input type="file" id="csv-file-input" accept=".csv" class="hidden">
                 </div>
             </div>
 
@@ -247,6 +268,11 @@
         const endTimeInput = document.getElementById('end-time');
         const filterButton = document.getElementById('filter-button');
 
+        // Data Action elements
+        const exportCsvButton = document.getElementById('export-csv-button');
+        const importCsvButton = document.getElementById('import-csv-button');
+        const csvFileInput = document.getElementById('csv-file-input');
+
         // Sidebar data elements
         const latestDataContent = document.getElementById('latest-data-content');
         const latestDataPlaceholder = document.getElementById('latest-data-placeholder');
@@ -307,24 +333,20 @@
                 drifterSelect.appendChild(option);
             });
         }
-
-        async function fetchAndPlotData() {
-            console.log('Fetching drifter data...');
-            statusEl.textContent = 'Fetching...';
-            statusEl.className = 'text-sm font-medium px-2 py-1 bg-yellow-200 text-yellow-800';
-            loadingEl.style.display = 'flex';
-            dataLayers.clearLayers(); // Clear all old polylines, markers, etc.
-            clearSidebar();
-
+        
+        /**
+         * Builds a Supabase query based on the current UI filters.
+         * This is a helper function used by fetchAndPlotData and exportFilteredData.
+         */
+        function buildFilteredQuery() {
             const selectedDrifterId = drifterSelect.value;
             const startTime = startTimeInput.value;
             const endTime = endTimeInput.value;
 
-            // Build query
             let query = db.from('drifter_positions')
                 .select('*')
                 .order('timestamp', { ascending: false })
-                .limit(2000); // Limit to 2000 points per query
+                .limit(2000); // Limit to 2000 points
 
             if (selectedDrifterId !== 'all') {
                 query = query.eq('drifter_id', selectedDrifterId);
@@ -335,7 +357,18 @@
             if (endTime) {
                 query = query.lte('timestamp', new Date(endTime).toISOString());
             }
+            return query;
+        }
 
+        async function fetchAndPlotData() {
+            console.log('Fetching drifter data...');
+            statusEl.textContent = 'Fetching...';
+            statusEl.className = 'text-sm font-medium px-2 py-1 bg-yellow-200 text-yellow-800';
+            loadingEl.style.display = 'flex';
+            dataLayers.clearLayers(); // Clear all old polylines, markers, etc.
+            clearSidebar();
+
+            const query = buildFilteredQuery();
             const { data, error } = await query;
 
             if (error) {
@@ -351,7 +384,7 @@
                 plotData(data);
                 
                 // Update sidebar only if a single drifter is selected
-                if (selectedDrifterId !== 'all') {
+                if (drifterSelect.value !== 'all') {
                     updateSidebar(data[0]); // data[0] is the latest
                 }
 
@@ -385,7 +418,9 @@
                 allLatLngs.push(...latLngs);
 
                 const color = drifterColors[drifterIndex % drifterColors.length];
-                const drifterName = drifterInfoCache[drifterId] || `Drifter ${drifterId.substring(0, 4)}`;
+                // Handle names for both Supabase data (in cache) and local CSV data
+                const drifterName = drifterInfoCache[drifterId] || 
+                                    (drifterId.startsWith('local_') ? drifterId.replace(/_/g, ' ') : `Drifter ${drifterId.substring(0, 4)}`);
                 drifterIndex++;
 
                 // 1. Create Dotted Polyline
@@ -536,13 +571,197 @@
                 });
         }
 
-        // --- 6. INITIALIZATION ---
+        // --- 6. DATA ACTIONS (CSV Import/Export) ---
+
+        /**
+         * Fetches filtered data and triggers a CSV download.
+         */
+        async function exportFilteredData() {
+            statusEl.textContent = 'Exporting...';
+            statusEl.className = 'text-sm font-medium px-2 py-1 bg-blue-200 text-blue-800';
+            
+            const query = buildFilteredQuery();
+            const { data, error } = await query;
+
+            if (error) {
+                console.error('Error fetching data for export:', error);
+                statusEl.textContent = 'Export Error';
+                statusEl.className = 'text-sm font-medium px-2 py-1 bg-red-200 text-red-800';
+                return;
+            }
+            
+            if (!data || data.length === 0) {
+                console.log('No data to export.');
+                statusEl.textContent = 'No Data';
+                statusEl.className = 'text-sm font-medium px-2 py-1 bg-gray-200 text-gray-600';
+                return;
+            }
+
+            const csv = convertToCSV(data);
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            
+            link.setAttribute('href', url);
+            const fileName = `drifter_export_${new Date().toISOString().split('T')[0]}.csv`;
+            link.setAttribute('download', fileName);
+            link.style.visibility = 'hidden';
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            statusEl.textContent = 'Exported';
+            statusEl.className = 'text-sm font-medium px-2 py-1 bg-green-200 text-green-800';
+        }
+
+        /**
+         * Converts an array of objects into a CSV string.
+         * @param {Array<Object>} data The data array from Supabase.
+         */
+        function convertToCSV(data) {
+            const headers = Object.keys(data[0]);
+            const csvRows = [headers.join(',')]; // Header row
+
+            for (const row of data) {
+                const values = headers.map(header => {
+                    let val = row[header];
+                    if (val === null || val === undefined) {
+                        return '';
+                    }
+                    if (typeof val === 'object') {
+                        // Stringify JSON objects and wrap in quotes
+                        val = `"${JSON.stringify(val).replace(/"/g, '""')}"`;
+                    } else {
+                        // Wrap plain strings in quotes to handle potential commas
+                        val = `"${String(val).replace(/"/g, '""')}"`;
+                    }
+                    return val;
+                });
+                csvRows.push(values.join(','));
+            }
+            return csvRows.join('\n');
+        }
+
+        /**
+         * Handles the file input change event for CSV import.
+         * @param {Event} event The file input event.
+         */
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            statusEl.textContent = 'Parsing CSV...';
+            statusEl.className = 'text-sm font-medium px-2 py-1 bg-yellow-200 text-yellow-800';
+            loadingEl.style.display = 'flex';
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const text = e.target.result;
+                const parsedData = parseCSV(text);
+                
+                if (parsedData.length === 0) {
+                    statusEl.textContent = 'CSV Error';
+                    statusEl.className = 'text-sm font-medium px-2 py-1 bg-red-200 text-red-800';
+                    loadingEl.style.display = 'none';
+                    return;
+                }
+                
+                // Clear map and sidebar
+                dataLayers.clearLayers();
+                clearSidebar();
+                
+                // Stop listening to Supabase
+                if (currentSubscription) {
+                    db.removeChannel(currentSubscription);
+                    currentSubscription = null;
+                }
+
+                // Plot the local data
+                plotData(parsedData);
+                
+                statusEl.textContent = 'Displaying Local CSV';
+                statusEl.className = 'text-sm font-medium px-2 py-1 bg-blue-200 text-blue-800';
+                loadingEl.style.display = 'none';
+            };
+            
+            reader.readAsText(file);
+            
+            // Reset input value so 'change' fires again for the same file
+            event.target.value = null;
+        }
+
+        /**
+         * A simple CSV parser.
+         * @param {string} text The raw CSV text.
+         * @returns {Array<Object>} An array of data objects, newest first.
+         */
+        function parseCSV(text) {
+            try {
+                const lines = text.split('\n').filter(line => line.trim() !== '');
+                if (lines.length < 2) throw new Error('No data rows in CSV.');
+
+                const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
+                
+                const latIndex = headers.indexOf('latitude');
+                const lonIndex = headers.indexOf('longitude');
+                const timeIndex = headers.indexOf('timestamp');
+                // Look for 'drifter_id' or 'name' for grouping
+                const idIndex = headers.indexOf('drifter_id') !== -1 ? headers.indexOf('drifter_id') : headers.indexOf('name');
+                const batteryIndex = headers.indexOf('battery_level');
+
+                if (latIndex === -1 || lonIndex === -1) {
+                    throw new Error('CSV must contain "latitude" and "longitude" columns.');
+                }
+
+                const data = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
+                    
+                    const lat = parseFloat(values[latIndex]);
+                    const lon = parseFloat(values[lonIndex]);
+
+                    if (isNaN(lat) || isNaN(lon)) continue; // Skip invalid rows
+
+                    const drifter_id = idIndex !== -1 ? values[idIndex] : 'local_data';
+                    const timestamp = timeIndex !== -1 ? (values[timeIndex] || new Date().toISOString()) : new Date().toISOString();
+                    const battery_level = batteryIndex !== -1 ? parseFloat(values[batteryIndex]) : null;
+
+                    data.push({
+                        id: i, // Fake ID
+                        drifter_id: drifter_id,
+                        timestamp: new Date(timestamp).toISOString(), // Standardize timestamp
+                        latitude: lat,
+                        longitude: lon,
+                        battery_level: isNaN(battery_level) ? null : battery_level,
+                        other_data: null
+                    });
+                }
+                
+                // Return data sorted newest first, just like Supabase query
+                return data.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                
+            } catch (error) {
+                console.error('Error parsing CSV:', error);
+                statusEl.textContent = `CSV Error: ${error.message}`;
+                statusEl.className = 'text-sm font-medium px-2 py-1 bg-red-200 text-red-800';
+                return [];
+            }
+        }
+
+
+        // --- 7. INITIALIZATION ---
         
-        // Add event listener for the filter button
+        // Filter button
         filterButton.addEventListener('click', () => {
             fetchAndPlotData();
             subscribeToChanges(); // Re-subscribe with new filters
         });
+
+        // Data Action buttons
+        exportCsvButton.addEventListener('click', exportFilteredData);
+        importCsvButton.addEventListener('click', () => csvFileInput.click());
+        csvFileInput.addEventListener('change', handleFileUpload);
 
         // Initial load
         map.whenReady(async () => {
