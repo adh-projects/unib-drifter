@@ -13,6 +13,8 @@
     
     <!-- Supabase-js Client --><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
+    <!-- Chart.js --><script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
     <style>
         /* --- Professional/Enterprise UI Style --- */
         *, *::before, *::after {
@@ -36,7 +38,7 @@
         .sidebar {
             background-color: #ffffff;
             border-right: 1px solid #dee2e6;
-            width: 320px; /* Slightly wider for filters */
+            width: 320px; /* Fixed width for both mobile overlay and desktop */
         }
         .info-box, .filter-box {
             background-color: #f8f9fa;
@@ -168,8 +170,16 @@
 
 <body class="h-full flex flex-col">
 
-    <!-- Header --><header class="header w-full p-4 flex justify-between items-center shadow-sm">
-        <h1 class="text-xl font-bold">UNIB Drifter Dashboard</h1>
+    <!-- Header --><header class="header w-full p-4 flex justify-between items-center shadow-sm z-50 relative">
+        <div class="flex items-center space-x-2">
+            <!-- Hamburger Toggle Button -->
+            <button id="menu-toggle-btn" class="md:hidden p-1 text-gray-700">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                </svg>
+            </button>
+            <h1 class="text-xl font-bold">UNIB Drifter Dashboard</h1>
+        </div>
         <div class="flex items-center space-x-3">
             <span id="connection-status" class="text-sm font-medium px-2 py-1 bg-gray-200 text-gray-600">Connecting...</span>
         </div>
@@ -177,8 +187,22 @@
 
     <!-- Main Content --><div class="flex-1 flex overflow-hidden">
         
-        <!-- Sidebar --><aside class="sidebar h-full overflow-y-auto p-5 space-y-4 flex-shrink-0">
+        <!-- Sidebar (Mobile Hidden, Desktop Visible) -->
+        <aside id="sidebar" class="sidebar h-full overflow-y-auto p-5 space-y-4 flex-shrink-0
+                                 fixed md:relative z-40
+                                 transform -translate-x-full md:translate-x-0
+                                 transition-transform duration-300 ease-in-out">
             
+            <!-- Mobile Menu Header -->
+            <div class="flex justify-between items-center pb-2 border-b border-gray-300 md:hidden">
+                <h2 class="text-lg font-bold">Menu</h2>
+                <button id="menu-close-btn" class="p-1 text-gray-700">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+
             <!-- Filters Section --><div class="filter-box p-3">
                 <h2 class="filter-title border-b border-gray-300 pb-2 mb-3">Filters</h2>
                 <div class="space-y-3">
@@ -205,7 +229,7 @@
                 <h2 class="filter-title border-b border-gray-300 pb-2 mb-3">Data Actions</h2>
                 <div class="space-y-2">
                     <button id="export-csv-button" class="btn btn-secondary">Export as CSV</button>
-                    <button id="import-csv-button" class="btn btn-secondary">Import Data </button>
+                    <button id="import-csv-button" class="btn btn-secondary">Import CSV Data</button>
                     <input type="file" id="csv-file-input" accept=".csv" class="hidden">
                 </div>
             </div>
@@ -243,11 +267,31 @@
         </aside>
 
         <!-- Map Area --><main class="flex-1 h-full relative">
+            <!-- Mobile Overlay -->
+            <div id="menu-overlay" class="fixed inset-0 bg-black bg-opacity-50 z-30 hidden md:hidden"></div>
+            
             <div id="map"></div>
             <div id="loading-overlay">
                 <span>Loading Map & Data...</span>
             </div>
         </main>
+    </div>
+
+    <!-- SST Chart Modal -->
+    <div id="sst-modal" class="fixed inset-0 bg-black bg-opacity-50 z-[10001] hidden items-center justify-center p-4">
+        <div id="sst-modal-content" class="bg-white p-5 max-w-3xl w-full">
+            <div class="flex justify-between items-center border-b border-gray-300 pb-2 mb-3">
+                <h2 id="sst-modal-title" class="text-lg font-bold">SST Time-series</h2>
+                <button id="sst-modal-close-btn" class="p-1 text-gray-700">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-6 h-6">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            <div class="relative h-64 md:h-96">
+                <canvas id="sst-chart"></canvas>
+            </div>
+        </div>
     </div>
 
     <script type="module">
@@ -261,6 +305,12 @@
 
         const statusEl = document.getElementById('connection-status');
         const loadingEl = document.getElementById('loading-overlay');
+
+        // Menu elements
+        const menuToggleBtn = document.getElementById('menu-toggle-btn');
+        const menuCloseBtn = document.getElementById('menu-close-btn');
+        const sidebar = document.getElementById('sidebar');
+        const menuOverlay = document.getElementById('menu-overlay');
         
         // Filter elements
         const drifterSelect = document.getElementById('drifter-select');
@@ -283,6 +333,12 @@
         const latEl = document.getElementById('latest-lat');
         const lonEl = document.getElementById('latest-lon');
         const batteryEl = document.getElementById('latest-battery');
+
+        // Modal elements
+        const sstModal = document.getElementById('sst-modal');
+        const sstModalTitle = document.getElementById('sst-modal-title');
+        const sstModalCloseBtn = document.getElementById('sst-modal-close-btn');
+        const sstChartCanvas = document.getElementById('sst-chart').getContext('2d');
 
         // --- 3. MAP INITIALIZATION ---
         const map = L.map('map').setView([0, 0], 3);
@@ -314,6 +370,7 @@
             '#337ab7', '#c9302c', '#449d44', '#ec971f', '#46b8da'
         ];
         let currentSubscription = null;
+        let sstChartInstance = null; // To hold the Chart.js instance
 
         // --- 4. DATA FETCHING & PLOTTING ---
 
@@ -482,6 +539,12 @@
 
                 L.marker(endPoint, { icon: buoyIcon })
                     .bindPopup(popupContent)
+                    .on('mouseover', function (e) { this.openPopup(); })
+                    .on('mouseout', function (e) { this.closePopup(); })
+                    .on('click', () => {
+                        // Pass positions (newest first) and name
+                        showSstChartModal(positions, drifterName);
+                    })
                     .addTo(dataLayers);
             }
 
@@ -524,7 +587,102 @@
             }
         }
 
-        // --- 5. REAL-TIME SUBSCRIPTION ---
+        // --- 5. MODAL & CHARTING FUNCTIONS ---
+
+        /**
+         * Shows the SST time-series chart in a modal.
+         * @param {Array<Object>} positionsData The position data for a single drifter, newest first.
+         * @param {string} drifterName The name of the drifter.
+         */
+        function showSstChartModal(positionsData, drifterName) {
+            // Data is newest first, reverse it for chronological chart
+            const chartData = positionsData.slice().reverse(); 
+
+            const labels = chartData.map(pos => new Date(pos.timestamp).toLocaleString());
+            const sstValues = chartData.map(pos => {
+                if (pos.other_data && (pos.other_data.sst_c !== null || pos.other_data.sst_c !== undefined)) {
+                    return pos.other_data.sst_c;
+                }
+                return null; // Handle missing data
+            });
+            
+            const hasSstData = sstValues.some(val => val !== null);
+
+            // Destroy old chart if it exists
+            if (sstChartInstance) {
+                sstChartInstance.destroy();
+            }
+
+            sstModalTitle.textContent = `SST Time-series for ${drifterName}`;
+            
+            if (!hasSstData) {
+                 sstChartCanvas.canvas.style.display = 'none';
+                 // Show a message instead
+                 if (!document.getElementById('no-sst-data')) {
+                    const noDataEl = document.createElement('p');
+                    noDataEl.id = 'no-sst-data';
+                    noDataEl.className = 'text-center text-gray-500 py-10';
+                    noDataEl.textContent = 'No SST (Sea Surface Temperature) data available for this drifter.';
+                    sstChartCanvas.canvas.parentNode.appendChild(noDataEl);
+                 }
+            } else {
+                sstChartCanvas.canvas.style.display = 'block';
+                const noDataEl = document.getElementById('no-sst-data');
+                if (noDataEl) noDataEl.remove();
+
+                sstChartInstance = new Chart(sstChartCanvas, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Sea Surface Temp (°C)',
+                            data: sstValues,
+                            borderColor: '#0056b3',
+                            backgroundColor: 'rgba(0, 86, 179, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.1,
+                            spanGaps: true // Connect lines over null values
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Timestamp'
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Temperature (°C)'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Show the modal
+            sstModal.classList.remove('hidden');
+            sstModal.classList.add('flex'); // Use flex to center it
+        }
+
+        function hideSstChartModal() {
+            sstModal.classList.add('hidden');
+            sstModal.classList.remove('flex');
+            if (sstChartInstance) {
+                sstChartInstance.destroy();
+                sstChartInstance = null;
+            }
+            const noDataEl = document.getElementById('no-sst-data');
+            if (noDataEl) noDataEl.remove();
+        }
+
+        // --- 6. REAL-TIME SUBSCRIPTION ---
         function subscribeToChanges() {
             const selectedDrifterId = drifterSelect.value;
             console.log(`Subscribing to changes for: ${selectedDrifterId}`);
@@ -571,7 +729,7 @@
                 });
         }
 
-        // --- 6. DATA ACTIONS (CSV Import/Export) ---
+        // --- 7. DATA ACTIONS (CSV Import/Export) ---
 
         /**
          * Fetches filtered data and triggers a CSV download.
@@ -726,6 +884,16 @@
                     const drifter_id = idIndex !== -1 ? values[idIndex] : 'local_data';
                     const timestamp = timeIndex !== -1 ? (values[timeIndex] || new Date().toISOString()) : new Date().toISOString();
                     const battery_level = batteryIndex !== -1 ? parseFloat(values[batteryIndex]) : null;
+                    
+                    // Simple SST check
+                    const sstIndex = headers.indexOf('sst_c');
+                    let other_data = null;
+                    if (sstIndex !== -1) {
+                        const sst = parseFloat(values[sstIndex]);
+                        if (!isNaN(sst)) {
+                            other_data = { sst_c: sst };
+                        }
+                    }
 
                     data.push({
                         id: i, // Fake ID
@@ -734,7 +902,7 @@
                         latitude: lat,
                         longitude: lon,
                         battery_level: isNaN(battery_level) ? null : battery_level,
-                        other_data: null
+                        other_data: other_data
                     });
                 }
                 
@@ -750,8 +918,17 @@
         }
 
 
-        // --- 7. INITIALIZATION ---
+        // --- 8. INITIALIZATION ---
         
+        // Menu toggle listeners
+        const toggleMenu = () => {
+            sidebar.classList.toggle('-translate-x-full');
+            menuOverlay.classList.toggle('hidden');
+        };
+        menuToggleBtn.addEventListener('click', toggleMenu);
+        menuCloseBtn.addEventListener('click', toggleMenu);
+        menuOverlay.addEventListener('click', toggleMenu);
+
         // Filter button
         filterButton.addEventListener('click', () => {
             fetchAndPlotData();
@@ -762,6 +939,14 @@
         exportCsvButton.addEventListener('click', exportFilteredData);
         importCsvButton.addEventListener('click', () => csvFileInput.click());
         csvFileInput.addEventListener('change', handleFileUpload);
+
+        // Modal listeners
+        sstModalCloseBtn.addEventListener('click', hideSstChartModal);
+        sstModal.addEventListener('click', (e) => {
+            if (e.target.id === 'sst-modal') {
+                hideSstChartModal();
+            }
+         });
 
         // Initial load
         map.whenReady(async () => {
