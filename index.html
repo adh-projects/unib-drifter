@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-g">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ocean Drifter Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path fill='%230056b3' d='M50 60C30 60 10 70 10 80s20 20 40 20 40-10 40-20-20-20-40-20z' /><rect fill='%23333' x='45' y='15' width='10' height='40'/><circle fill='%23d9534f' cx='50' cy='10' r='10'/></svg>">
+    
+    <!-- Tailwind CSS --><script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet.js CSS & JS --><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <!-- Supabase-js Client --><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        /* --- Professional/Enterprise UI Style --- */
+        *, *::before, *::after {
+            border-radius: 0 !important;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            background-color: #f8f9fa;
+        }
+        #map {
+            height: 100%;
+            width: 100%;
+            background-color: #e9ecef;
+            border: 1px solid #dee2e6;
+        }
+        .header {
+            background-color: #ffffff;
+            border-bottom: 1px solid #dee2e6;
+            color: #212529;
+        }
+        .sidebar {
+            background-color: #ffffff;
+            border-right: 1px solid #dee2e6;
+            width: 320px; /* Slightly wider for filters */
+        }
+        .info-box, .filter-box {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+        }
+        .info-title, .filter-title {
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+        .info-data {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: #212529;
+            word-break: break-all;
+        }
+        .info-data-small {
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+        /* Form inputs */
+        .form-input, .form-select {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: #495057;
+            background-color: #fff;
+            background-clip: padding-box;
+            border: 1px solid #ced4da;
+            transition: border-color .15s ease-in-out,box-shadow .15s ease-in-out;
+        }
+        .form-input:focus, .form-select:focus {
+            color: #495057;
+            background-color: #fff;
+            border-color: #80bdff;
+            outline: 0;
+            box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+        }
+        .filter-button {
+            width: 100%;
+            padding: 0.6rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #fff;
+            background-color: #0056b3;
+            border: 1px solid #0056b3;
+            cursor: pointer;
+            transition: background-color .15s ease-in-out;
+        }
+        .filter-button:hover {
+            background-color: #004494;
+        }
+        /* Leaflet controls */
+        .leaflet-control-layers, .leaflet-control-zoom, .leaflet-control-attribution {
+            border: 1px solid #adb5bd;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.2);
+        }
+        .leaflet-bar a, .leaflet-bar a:hover {
+            border: none;
+            box-shadow: none;
+        }
+        #loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.7);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #343a40;
+        }
+        /* Drifter Icon & Animation */
+        .drifter-icon-wrapper {
+            animation: blink 1.5s infinite ease-in-out;
+            position: relative; /* Needed for absolute positioning of text */
+        }
+        .drifter-buoy-svg {
+            width: 32px;
+            height: 32px;
+        }
+        .drifter-name-label {
+            position: absolute;
+            bottom: -20px; /* Position below buoy (buoy's anchor is bottom-center) */
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: nowrap;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 2px 5px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: #333;
+            border: 1px solid #ccc;
+            pointer-events: none; /* Make it unclickable so map interactions aren't blocked */
+            z-index: 1000;
+        }
+        @keyframes blink {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+        /* Custom tooltip */
+        .drifter-tooltip {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+            font-size: 0.9rem;
+            padding: 6px 8px;
+        }
+    </style>
+</head>
+
+<body class="h-full flex flex-col">
+
+    <!-- Header --><header class="header w-full p-4 flex justify-between items-center shadow-sm">
+        <h1 class="text-xl font-bold">UNIB Drifter Dashboard</h1>
+        <div class="flex items-center space-x-3">
+            <span id="connection-status" class="text-sm font-medium px-2 py-1 bg-gray-200 text-gray-600">Connecting...</span>
+        </div>
+    </header>
+
+    <!-- Main Content --><div class="flex-1 flex overflow-hidden">
+        
+        <!-- Sidebar --><aside class="sidebar h-full overflow-y-auto p-5 space-y-4 flex-shrink-0">
+            
+            <!-- Filters Section --><div class="filter-box p-3">
+                <h2 class="filter-title border-b border-gray-300 pb-2 mb-3">Filters</h2>
+                <div class="space-y-3">
+                    <div>
+                        <label for="drifter-select" class="block text-sm font-medium text-gray-700 mb-1">Drifter ID</label>
+                        <select id="drifter-select" class="form-select">
+                            <option value="all">All Drifters</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="start-time" class="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
+                        <input type="datetime-local" id="start-time" class="form-input">
+                    </div>
+                    <div>
+                        <label for="end-time" class="block text-sm font-medium text-gray-700 mb-1">End Time</label>
+                        <input type="datetime-local" id="end-time" class="form-input">
+                    </div>
+                    <button id="filter-button" class="filter-button">Apply Filters</button>
+                </div>
+            </div>
+
+            <!-- Latest Data Section --><div class="info-box p-3">
+                <h2 class="info-title border-b border-gray-300 pb-2 mb-3">Latest Data</h2>
+                <div id="latest-data-content" class="space-y-3">
+                    <p id="latest-data-placeholder" class="text-sm text-gray-500">Select a single drifter and apply filters to see latest data.</p>
+                    <div id="latest-data-info" class="hidden space-y-3">
+                        <div>
+                            <div class="info-title">Drifter Name</div>
+                            <div id="latest-name" class="info-data">---</div>
+                        </div>
+                        <div>
+                            <div class="info-title">Last Update</div>
+                            <div id="latest-timestamp" class="info-data">---</div>
+                        </div>
+                        <div>
+                            <div class="info-title">Coordinates</div>
+                            <div id="latest-lat" class="info-data">---</div>
+                            <div id="latest-lon" class="info-data">---</div>
+                        </div>
+                        <div>
+                            <div class="info-title">Battery</div>
+                            <div id="latest-battery" class="info-data">---</div>
+                        </div>
+                        <div>
+                            <div class="info-title">Device Info</div>
+                            <div id="latest-id" class="info-data-small">ID: ---</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- Map Area --><main class="flex-1 h-full relative">
+            <div id="map"></div>
+            <div id="loading-overlay">
+                <span>Loading Map & Data...</span>
+            </div>
+        </main>
+    </div>
+
+    <script type="module">
+        // --- 1. CONFIGURATION ---
+        const SUPABASE_URL = 'https://oeapjvhpekxqweybgbkn.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lYXBqdmhwZWt4cXdleWJnYmtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE1NDk2NzUsImV4cCI6MjA3NzEyNTY3NX0.iC3GVorZid05A1PiJ_tmq3WmOLmPE_IS4FmHLS3TJPk';
+
+        // --- 2. SUPABASE & UI ELEMENTS ---
+        const { createClient } = supabase;
+        const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        const statusEl = document.getElementById('connection-status');
+        const loadingEl = document.getElementById('loading-overlay');
+        
+        // Filter elements
+        const drifterSelect = document.getElementById('drifter-select');
+        const startTimeInput = document.getElementById('start-time');
+        const endTimeInput = document.getElementById('end-time');
+        const filterButton = document.getElementById('filter-button');
+
+        // Sidebar data elements
+        const latestDataContent = document.getElementById('latest-data-content');
+        const latestDataPlaceholder = document.getElementById('latest-data-placeholder');
+        const latestDataInfo = document.getElementById('latest-data-info');
+        const latestNameEl = document.getElementById('latest-name');
+        const latestIdEl = document.getElementById('latest-id');
+        const timestampEl = document.getElementById('latest-timestamp');
+        const latEl = document.getElementById('latest-lat');
+        const lonEl = document.getElementById('latest-lon');
+        const batteryEl = document.getElementById('latest-battery');
+
+        // --- 3. MAP INITIALIZATION ---
+        const map = L.map('map').setView([0, 0], 3);
+
+        // Basemaps
+        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri'
+        });
+        const ocean = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri'
+        });
+
+        L.control.layers({
+            "Street Map": osm,
+            "Satellite": satellite,
+            "Ocean Base": ocean
+        }).addTo(map);
+
+        // Map Layers
+        const dataLayers = L.layerGroup().addTo(map); // Main group for all drifter data
+        let drifterInfoCache = {}; // Cache to store {id: name}
+        
+        // Color palette for multiple drifters
+        const drifterColors = [
+            '#0056b3', '#d9534f', '#5cb85c', '#f0ad4e', '#5bc0de', 
+            '#337ab7', '#c9302c', '#449d44', '#ec971f', '#46b8da'
+        ];
+        let currentSubscription = null;
+
+        // --- 4. DATA FETCHING & PLOTTING ---
+
+        async function populateDrifterDropdown() {
+            const { data, error } = await db.from('drifters').select('id, name');
+            if (error) {
+                console.error('Error fetching drifters list:', error);
+                return;
+            }
+            
+            drifterInfoCache = {}; // Clear cache
+            data.forEach(drifter => {
+                drifterInfoCache[drifter.id] = drifter.name; // Store name in cache
+                const option = document.createElement('option');
+                option.value = drifter.id;
+                option.textContent = drifter.name; // Changed: Only show name
+                drifterSelect.appendChild(option);
+            });
+        }
+
+        async function fetchAndPlotData() {
+            console.log('Fetching drifter data...');
+            statusEl.textContent = 'Fetching...';
+            statusEl.className = 'text-sm font-medium px-2 py-1 bg-yellow-200 text-yellow-800';
+            loadingEl.style.display = 'flex';
+            dataLayers.clearLayers(); // Clear all old polylines, markers, etc.
+            clearSidebar();
+
+            const selectedDrifterId = drifterSelect.value;
+            const startTime = startTimeInput.value;
+            const endTime = endTimeInput.value;
+
+            // Build query
+            let query = db.from('drifter_positions')
+                .select('*')
+                .order('timestamp', { ascending: false })
+                .limit(2000); // Limit to 2000 points per query
+
+            if (selectedDrifterId !== 'all') {
+                query = query.eq('drifter_id', selectedDrifterId);
+            }
+            if (startTime) {
+                query = query.gte('timestamp', new Date(startTime).toISOString());
+            }
+            if (endTime) {
+                query = query.lte('timestamp', new Date(endTime).toISOString());
+            }
+
+            const { data, error } = await query;
+
+            if (error) {
+                console.error('Error fetching data:', error);
+                statusEl.textContent = 'Error';
+                statusEl.className = 'text-sm font-medium px-2 py-1 bg-red-200 text-red-800';
+                loadingEl.textContent = `Error: ${error.message}`;
+                return;
+            }
+
+            if (data && data.length > 0) {
+                console.log(`Fetched ${data.length} points.`);
+                plotData(data);
+                
+                // Update sidebar only if a single drifter is selected
+                if (selectedDrifterId !== 'all') {
+                    updateSidebar(data[0]); // data[0] is the latest
+                }
+
+                statusEl.textContent = 'Live';
+                statusEl.className = 'text-sm font-medium px-2 py-1 bg-green-200 text-green-800';
+            } else {
+                console.log('No data found for these filters.');
+                statusEl.textContent = 'No Data';
+                statusEl.className = 'text-sm font-medium px-2 py-1 bg-gray-200 text-gray-600';
+            }
+            loadingEl.style.display = 'none';
+        }
+
+        function plotData(data) {
+            // Group data by drifter_id
+            const dataByDrifter = data.reduce((acc, pos) => {
+                if (!acc[pos.drifter_id]) {
+                    acc[pos.drifter_id] = [];
+                }
+                acc[pos.drifter_id].push(pos);
+                return acc;
+            }, {});
+
+            let allLatLngs = []; // For map bounds
+            let drifterIndex = 0;
+
+            for (const drifterId in dataByDrifter) {
+                const positions = dataByDrifter[drifterId];
+                // Data is newest first, reverse for chronological plot
+                const latLngs = positions.map(pos => [pos.latitude, pos.longitude]).reverse();
+                allLatLngs.push(...latLngs);
+
+                const color = drifterColors[drifterIndex % drifterColors.length];
+                const drifterName = drifterInfoCache[drifterId] || `Drifter ${drifterId.substring(0, 4)}`;
+                drifterIndex++;
+
+                // 1. Create Dotted Polyline
+                L.polyline(latLngs, { 
+                    color: color, 
+                    weight: 3,
+                    dashArray: '5, 10'
+                }).addTo(dataLayers);
+
+                // 2. Create Tooltip Markers
+                positions.forEach(pos => {
+                    const lat = pos.latitude;
+                    const lon = pos.longitude;
+                    const time = new Date(pos.timestamp).toLocaleString();
+                    const tooltipContent = `
+                        <div>
+                            <b>Drifter:</b> ${drifterName}<br>
+                            <b>Time:</b> ${time}<br>
+                            <b>Lat:</b> ${lat.toFixed(6)}<br>
+                            <b>Lon:</b> ${lon.toFixed(6)}
+                        </div>`;
+                    
+                    L.circleMarker([lat, lon], { radius: 6, color: 'transparent', opacity: 0, fillOpacity: 0 })
+                        .bindTooltip(tooltipContent, { sticky: true, className: 'drifter-tooltip' })
+                        .addTo(dataLayers);
+                });
+
+                // 3. Create Blinking Icon for Latest Position
+                const latestData = positions[0]; // Newest data
+                const endPoint = [latestData.latitude, latestData.longitude];
+                const endTime = new Date(latestData.timestamp).toLocaleString();
+                const battery = latestData.battery_level ? `${latestData.battery_level.toFixed(2)}v` : 'N/A';
+                const popupContent = `
+                    <div>
+                        <b>${drifterName}</b><br>
+                        <b>Latest Position</b><br>
+                        ${endTime}<br>
+                        Coords: ${endPoint[0].toFixed(4)}, ${endPoint[1].toFixed(4)}<br>
+                        Batt: ${battery}
+                    </div>`;
+
+                const buoyIconHTML = `
+                    <div style="text-align: center;">
+                        <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" class="drifter-buoy-svg">
+                            <path class="buoy-body" fill="${color}" stroke="#333" stroke-width="1"
+                                  d="M16 18 C10 18, 6 21, 6 26 C6 31, 10 34, 16 34 C22 34, 26 31, 26 26 C26 21, 22 18, 16 18 Z" />
+                            <line class="buoy-antenna" stroke="#333" stroke-width="2" x1="16" y1="18" x2="16" y2="4" />
+                            <circle class="buoy-light" fill="${color}" stroke="#333" stroke-width="1" cx="16" cy="3" r="3" />
+                        </svg>
+                        <div class="drifter-name-label">${drifterName}</div>
+                    </div>`;
+
+                const buoyIcon = L.divIcon({
+                    className: 'drifter-icon-wrapper',
+                    html: buoyIconHTML,
+                    iconSize: [32, 32], // SVG size
+                    iconAnchor: [16, 32] // Anchor at bottom-center of SVG
+                });
+
+                L.marker(endPoint, { icon: buoyIcon })
+                    .bindPopup(popupContent)
+                    .addTo(dataLayers);
+            }
+
+            // Fit map to all tracks
+            if (allLatLngs.length > 0) {
+                map.fitBounds(L.latLngBounds(allLatLngs).pad(0.1));
+            }
+        }
+
+        function clearSidebar() {
+            latestDataPlaceholder.style.display = 'block';
+            latestDataInfo.classList.add('hidden');
+            latestNameEl.textContent = '---';
+            latestIdEl.textContent = 'ID: ---';
+            timestampEl.textContent = '---';
+            latEl.textContent = '---';
+            lonEl.textContent = '---';
+            batteryEl.textContent = '---';
+        }
+
+        function updateSidebar(latestData) {
+            if (!latestData) {
+                clearSidebar();
+                return;
+            }
+            
+            latestDataPlaceholder.style.display = 'none';
+            latestDataInfo.classList.remove('hidden');
+
+            latestNameEl.textContent = drifterInfoCache[latestData.drifter_id] || 'Unknown';
+            latestIdEl.textContent = `ID: ${latestData.drifter_id}`;
+            timestampEl.textContent = new Date(latestData.timestamp).toLocaleString();
+            latEl.textContent = latestData.latitude.toFixed(6);
+            lonEl.textContent = latestData.longitude.toFixed(6);
+            
+            if (latestData.battery_level) {
+                batteryEl.textContent = `${latestData.battery_level.toFixed(2)}v`;
+            } else {
+                batteryEl.textContent = 'N/A';
+            }
+        }
+
+        // --- 5. REAL-TIME SUBSCRIPTION ---
+        function subscribeToChanges() {
+            const selectedDrifterId = drifterSelect.value;
+            console.log(`Subscribing to changes for: ${selectedDrifterId}`);
+
+            // Remove old subscription if it exists
+            if (currentSubscription) {
+                db.removeChannel(currentSubscription);
+                currentSubscription = null;
+            }
+
+            let channelConfig = {
+                event: 'INSERT',
+                schema: 'public',
+                table: 'drifter_positions',
+            };
+
+            // Add filter if a specific drifter is selected
+            if (selectedDrifterId !== 'all') {
+                channelConfig.filter = `drifter_id=eq.${selectedDrifterId}`;
+            }
+
+            currentSubscription = db.channel('public:drifter_positions')
+                .on('postgres_changes', channelConfig, (payload) => {
+                    console.log('New data received!', payload);
+                    statusEl.textContent = 'Updating...';
+                    statusEl.className = 'text-sm font-medium px-2 py-1 bg-blue-200 text-blue-800';
+                    // Re-fetch all data to re-apply filters
+                    fetchAndPlotData();
+                })
+                .subscribe((status, err) => {
+                    if (status === 'SUBSCRIBED') {
+                        console.log('Real-time subscription active!');
+                        statusEl.textContent = 'Live';
+                        statusEl.className = 'text-sm font-medium px-2 py-1 bg-green-200 text-green-800';
+                    } else if (status === 'TIMED_OUT') {
+                        console.warn('Real-time subscription timed out.');
+                        statusEl.textContent = 'Offline';
+                        statusEl.className = 'text-sm font-medium px-2 py-1 bg-gray-200 text-gray-600';
+                    } else if (err) {
+                        console.error('Real-time subscription error:', err);
+                        statusEl.textContent = 'Error';
+                        statusEl.className = 'text-sm font-medium px-2 py-1 bg-red-200 text-red-800';
+                    }
+                });
+        }
+
+        // --- 6. INITIALIZATION ---
+        
+        // Add event listener for the filter button
+        filterButton.addEventListener('click', () => {
+            fetchAndPlotData();
+            subscribeToChanges(); // Re-subscribe with new filters
+        });
+
+        // Initial load
+        map.whenReady(async () => {
+            console.log('Map ready.');
+            loadingEl.style.display = 'flex';
+            await populateDrifterDropdown();
+            await fetchAndPlotData(); // Initial data load (all drifters)
+            subscribeToChanges(); // Start listening (for all drifters)
+        });
+
+    </script>
+</body>
+</html>
+
